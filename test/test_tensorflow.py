@@ -643,225 +643,297 @@ class MPITests(tf.test.TestCase):
                 with self.assertRaises(tf.errors.FailedPreconditionError):
                     session.run(hvd.allgather(tensor))
 
-    def test_horovod_allgather_grad(self):
-        """Test the correctness of the allgather gradient."""
+    #def test_horovod_allgather_grad(self):
+    #    """Test the correctness of the allgather gradient."""
+    #    hvd.init()
+    #    rank = hvd.rank()
+    #    size = hvd.size()
+    #
+    #    # As of TensorFlow v1.9, gradients are not supported on
+    #    # integer tensors
+    #    dtypes = [tf.float32, tf.float64]
+    #    dims = [1, 2, 3]
+    #
+    #    def graph_and_eager(dtype, dim, mode=context.GRAPH_MODE):
+    #        tensor_sizes = [3, 2, 7, 4, 6, 8, 10] * 5
+    #        tensor_sizes = tensor_sizes[:size]
+    #        if mode == context.EAGER_MODE:
+    #            with tf.GradientTape() as tape:
+    #                tensor = tf.Variable(tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank)
+    #                if dtype == tf.bool:
+    #                    tensor = tensor % 2
+    #                tensor = tf.cast(tensor, dtype=dtype)
+    #                gathered = hvd.allgather(tensor)
+    #                grad_list = []
+    #                for r, tensor_size in enumerate(tensor_sizes):
+    #                    g = tf.ones([tensor_size] + [17] * (dim - 1)) * r
+    #                    grad_list.append(g)
+    #                grad_ys = tf.concat(grad_list, axis=0)
+    #            grad_out = tape.gradient(gathered, tensor)
+    #        else:
+    #            tensor = tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank
+    #            if dtype == tf.bool:
+    #                tensor = tensor % 2
+    #            tensor = tf.cast(tensor, dtype=dtype)
+    #            gathered = hvd.allgather(tensor)
+    #            grad_list = []
+    #            for r, tensor_size in enumerate(tensor_sizes):
+    #                g = tf.ones([tensor_size] + [17] * (dim - 1)) * r
+    #                grad_list.append(g)
+    #            grad_ys = tf.concat(grad_list, axis=0)
+    #            grad = tf.gradients(gathered, tensor, grad_ys)[0]
+    #            grad_out = session.run(grad)
+    #
+    #        expected = np.ones(
+    #            [tensor_sizes[rank]] + [17] * (dim - 1)
+    #        ) * rank * size
+    #        err = np.linalg.norm(expected - grad_out)
+    #        return err, grad_out, expected
+    #
+    #    with self.eager_mode:
+    #        for dtype, dim in itertools.product(dtypes, dims):
+    #            err, grad_out, expected = graph_and_eager(dtype, dim, mode=context.EAGER_MODE)
+    #            with self.subTest(msg='eager mode'):
+    #                print('koko')
+    #                self.assertLess(err, 0.00000001,
+    #                                "gradient %s differs from expected %s, "
+    #                                "error: %s" %
+    #                                (grad_out, expected, str(err)))
+    #
+    #    with self.test_session(config=self.config) as session:
+    #        for dtype, dim in itertools.product(dtypes, dims):
+    #            err, grad_out, expected = graph_and_eager(dtype, dim)
+    #            with self.subTest(msg='graph mode'):
+    #                self.assertLess(err, 0.00000001,
+    #                                "gradient %s differs from expected %s, "
+    #                                "error: %s" %
+    #                                (grad_out, expected, str(err)))
+
+    def test_horovod_broadcast(self):
+        """Test that the broadcast correctly broadcasts 1D, 2D, 3D tensors."""
         hvd.init()
         rank = hvd.rank()
         size = hvd.size()
+
+        # This test does not apply if there is only one worker.
+        if size == 1:
+            return
+
+        def graph_and_eager(dtype, dim, root_rank):
+            tensor = tf.ones([17] * dim) * rank
+            root_tensor = tf.ones([17] * dim) * root_rank
+            if dtype == tf.bool:
+                tensor = tensor % 2
+                root_tensor = root_tensor % 2
+            tensor = tf.cast(tensor, dtype=dtype)
+            root_tensor = tf.cast(root_tensor, dtype=dtype)
+            broadcasted_tensor = hvd.broadcast(tensor, root_rank)
+            return root_tensor, broadcasted_tensor
+
+        dtypes = [tf.uint8, tf.int8, tf.uint16, tf.int16,
+                  tf.int32, tf.int64, tf.float16, tf.float32,
+                  tf.float64, tf.bool]
+        dims = [1, 2, 3]
+        root_ranks = list(range(size))
+
+        with self.eager_mode:
+            for dtype, dim, root_rank in itertools.product(dtypes, dims, root_ranks):
+                root_tensor, broadcasted_tensor = graph_and_eager(dtype, dim, root_rank)
+                with self.subTest(msg='eager mode'):
+                    self.assertTrue(
+                        tf.reduce_all(tf.equal(
+                            tf.cast(root_tensor, tf.int32), tf.cast(broadcasted_tensor, tf.int32))),
+                        "hvd.broadcast produces incorrect broadcasted tensor")
+
+        with self.test_session(config=self.config) as session:
+            for dtype, dim, root_rank in itertools.product(dtypes, dims, root_ranks):
+                root_tensor, broadcasted_tensor = graph_and_eager(dtype, dim, root_rank)
+                with self.subTest(msg='graph mode'):
+                    self.assertTrue(
+                        session.run(tf.reduce_all(tf.equal(
+                            tf.cast(root_tensor, tf.int32), tf.cast(broadcasted_tensor, tf.int32)))),
+                        "hvd.broadcast produces incorrect broadcasted tensor")
+
+    def test_horovod_broadcast_error(self):
+        """Test that the broadcast returns an error if any dimension besides
+        the first is different among the tensors being broadcasted."""
+        hvd.init()
+        rank = hvd.rank()
+        size = hvd.size()
+
+        # This test does not apply if there is only one worker.
+        if size == 1:
+            return
+
+        tensor_size = [17] * 3
+        tensor_size[1] = 10 * (rank + 1)
+
+        with self.test_session(config=self.config) as session:
+            tensor = tf.ones(tensor_size, dtype=tf.float32) * rank
+            with self.subTest(msg='graph mode'):
+                with self.assertRaises(tf.errors.FailedPreconditionError):
+                    session.run(hvd.broadcast(tensor, 0))
+
+        with self.eager_mode:
+            tensor = tf.ones(tensor_size, dtype=tf.float32) * rank
+            with self.subTest(msg='eager mode'):
+                with self.assertRaises(tf.errors.FailedPreconditionError):
+                    session.run(hvd.broadcast(tensor, 0))
+
+    def test_horovod_broadcast_type_error(self):
+        """Test that the broadcast returns an error if the types being broadcasted
+        differ among the processes"""
+        hvd.init()
+        rank = hvd.rank()
+        size = hvd.size()
+
+        # This test does not apply if there is only one worker.
+        if size == 1:
+            return
+
+        tensor_size = [17] * 3
+        dtype = tf.int32 if rank % 2 == 0 else tf.float32
+
+        with self.eager_mode:
+            tensor = tf.ones(tensor_size, dtype=dtype) * rank
+            with self.subTest(msg='eager mode'):
+                with self.assertRaises(tf.errors.FailedPreconditionError):
+                    hvd.broadcast(tensor, 0)
+
+        with self.test_session(config=self.config) as session:
+            tensor = tf.ones(tensor_size, dtype=dtype) * rank
+            with self.subTest(msg='graph mode'):
+                with self.assertRaises(tf.errors.FailedPreconditionError):
+                    session.run(hvd.broadcast(tensor, 0))
+
+    def test_horovod_broadcast_rank_error(self):
+        """Test that the broadcast returns an error if different ranks
+        specify different root rank."""
+        hvd.init()
+        rank = hvd.rank()
+        size = hvd.size()
+
+        # This test does not apply if there is only one worker.
+        if size == 1:
+            return
+
+        with self.eager_mode:
+            tensor = tf.ones([17] * 3, dtype=tf.float32)
+            with self.subTest(msg='eager mode'):
+                with self.assertRaises(tf.errors.FailedPreconditionError):
+                    hvd.broadcast(tensor, rank)
+
+        with self.test_session(config=self.config) as session:
+            tensor = tf.ones([17] * 3, dtype=tf.float32)
+            with self.subTest(msg='graph mode'):
+                with self.assertRaises(tf.errors.FailedPreconditionError):
+                    session.run(hvd.broadcast(tensor, rank))
+
+    def test_horovod_broadcast_grad(self):
+        """Test the correctness of the broadcast gradient."""
+        hvd.init()
+        rank = hvd.rank()
+        size = hvd.size()
+
+        # This test does not apply if there is only one worker.
+        if size == 1:
+            return
 
         # As of TensorFlow v1.9, gradients are not supported on
         # integer tensors
         dtypes = [tf.float32, tf.float64]
         dims = [1, 2, 3]
+        root_ranks = list(range(size))
 
-        def graph_and_eager(dtype, dim, mode=context.GRAPH_MODE):
-            tensor_sizes = [3, 2, 7, 4, 6, 8, 10] * 5
-            tensor_sizes = tensor_sizes[:size]
-            if mode == context.EAGER_MODE:
-                with tf.GradientTape() as tape:
-                    tensor = tf.Variable(tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank)
-                    if dtype == tf.bool:
-                        tensor = tensor % 2
-                    tensor = tf.cast(tensor, dtype=dtype)
-                    gathered = hvd.allgather(tensor)
-                    grad_list = []
-                    for r, tensor_size in enumerate(tensor_sizes):
-                        g = tf.ones([tensor_size] + [17] * (dim - 1)) * r
-                        grad_list.append(g)
-                    grad_ys = tf.concat(grad_list, axis=0)
-                grad_out = tape.gradient(gathered, tensor)
+        def graph_and_eager(dtype, dim, root_rank, session=None):
+            if session:
+                tensor = tf.ones([5] * dim) * rank
             else:
-                tensor = tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank
-                if dtype == tf.bool:
-                    tensor = tensor % 2
+                tensor = tf.Variable(tf.ones([5] * dim) * rank)
+            if dtype == tf.bool:
+                tensor = tensor % 2
+            if session:
                 tensor = tf.cast(tensor, dtype=dtype)
-                gathered = hvd.allgather(tensor)
-                grad_list = []
-                for r, tensor_size in enumerate(tensor_sizes):
-                    g = tf.ones([tensor_size] + [17] * (dim - 1)) * r
-                    grad_list.append(g)
-                grad_ys = tf.concat(grad_list, axis=0)
-                grad = tf.gradients(gathered, tensor, grad_ys)[0]
+                broadcasted_tensor = hvd.broadcast(tensor, root_rank)
+                grad_ys = tf.ones([5] * dim)
+                grad = tf.gradients(broadcasted_tensor, tensor, grad_ys)[0]
                 grad_out = session.run(grad)
-
-            expected = np.ones(
-                [tensor_sizes[rank]] + [17] * (dim - 1)
-            ) * rank * size
+            else:
+                with tf.GradientTape() as tape:
+                    tensor = tf.cast(tensor, dtype=dtype)
+                    broadcasted_tensor = hvd.broadcast(tensor, root_rank)
+                grad_out = tape.gradient(broadcasted_tensor, tensor)
+            c = size if rank == root_rank else 0
+            expected = np.ones([5] * dim) * c
             err = np.linalg.norm(expected - grad_out)
             return err, grad_out, expected
 
         with self.eager_mode:
-            for dtype, dim in itertools.product(dtypes, dims):
-                err, grad_out, expected = graph_and_eager(dtype, dim, mode=context.EAGER_MODE)
-                with self.subTest(msg='eager mode'):
-                    print('koko')
-                    self.assertLess(err, 0.00000001,
-                                    "gradient %s differs from expected %s, "
-                                    "error: %s" %
-                                    (grad_out, expected, str(err)))
+            for dtype, dim, root_rank in itertools.product(
+                    dtypes, dims, root_ranks):
+                err, grad_out, expected = graph_and_eager(dtype, dim, root_rank)
+                self.assertLess(err, 0.00000001,
+                                "gradient %s differs from expected %s, "
+                                "error: %s" % (grad_out, expected, str(err)))
 
         with self.test_session(config=self.config) as session:
-            for dtype, dim in itertools.product(dtypes, dims):
-                err, grad_out, expected = graph_and_eager(dtype, dim)
-                with self.subTest(msg='graph mode'):
-                    self.assertLess(err, 0.00000001,
-                                    "gradient %s differs from expected %s, "
-                                    "error: %s" %
-                                    (grad_out, expected, str(err)))
+            for dtype, dim, root_rank in itertools.product(
+                    dtypes, dims, root_ranks):
+                err, grad_out, expected = graph_and_eager(dtype, dim, root_rank, session)
+                self.assertLess(err, 0.00000001,
+                                "gradient %s differs from expected %s, "
+                                "error: %s" % (grad_out, expected, str(err)))
 
-    #def test_horovod_broadcast(self):
-    #    """Test that the broadcast correctly broadcasts 1D, 2D, 3D tensors."""
-    #    hvd.init()
-    #    rank = hvd.rank()
-    #    size = hvd.size()
-    #
-    #    # This test does not apply if there is only one worker.
-    #    if size == 1:
-    #        return
-    #
-    #    with self.test_session(config=self.config) as session:
-    #        dtypes = [tf.uint8, tf.int8, tf.uint16, tf.int16,
-    #                  tf.int32, tf.int64, tf.float16, tf.float32,
-    #                  tf.float64, tf.bool]
-    #        dims = [1, 2, 3]
-    #        root_ranks = list(range(size))
-    #        for dtype, dim, root_rank in itertools.product(dtypes, dims, root_ranks):
-    #            tensor = tf.ones([17] * dim) * rank
-    #            root_tensor = tf.ones([17] * dim) * root_rank
-    #            if dtype == tf.bool:
-    #                tensor = tensor % 2
-    #                root_tensor = root_tensor % 2
-    #            tensor = tf.cast(tensor, dtype=dtype)
-    #            root_tensor = tf.cast(root_tensor, dtype=dtype)
-    #            broadcasted_tensor = hvd.broadcast(tensor, root_rank)
-    #            self.assertTrue(
-    #                session.run(tf.reduce_all(tf.equal(
-    #                    tf.cast(root_tensor, tf.int32), tf.cast(broadcasted_tensor, tf.int32)))),
-    #                "hvd.broadcast produces incorrect broadcasted tensor")
-    #
-    #def test_horovod_broadcast_error(self):
-    #    """Test that the broadcast returns an error if any dimension besides
-    #    the first is different among the tensors being broadcasted."""
-    #    hvd.init()
-    #    rank = hvd.rank()
-    #    size = hvd.size()
-    #
-    #    # This test does not apply if there is only one worker.
-    #    if size == 1:
-    #        return
-    #
-    #    with self.test_session(config=self.config) as session:
-    #        tensor_size = [17] * 3
-    #        tensor_size[1] = 10 * (rank + 1)
-    #        tensor = tf.ones(tensor_size, dtype=tf.float32) * rank
-    #        with self.assertRaises(tf.errors.FailedPreconditionError):
-    #            session.run(hvd.broadcast(tensor, 0))
-    #
-    #def test_horovod_broadcast_type_error(self):
-    #    """Test that the broadcast returns an error if the types being broadcasted
-    #    differ among the processes"""
-    #    hvd.init()
-    #    rank = hvd.rank()
-    #    size = hvd.size()
-    #
-    #    # This test does not apply if there is only one worker.
-    #    if size == 1:
-    #        return
-    #
-    #    with self.test_session(config=self.config) as session:
-    #        tensor_size = [17] * 3
-    #        dtype = tf.int32 if rank % 2 == 0 else tf.float32
-    #        tensor = tf.ones(tensor_size, dtype=dtype) * rank
-    #        with self.assertRaises(tf.errors.FailedPreconditionError):
-    #            session.run(hvd.broadcast(tensor, 0))
-    #
-    #def test_horovod_broadcast_rank_error(self):
-    #    """Test that the broadcast returns an error if different ranks
-    #    specify different root rank."""
-    #    hvd.init()
-    #    rank = hvd.rank()
-    #    size = hvd.size()
-    #
-    #    # This test does not apply if there is only one worker.
-    #    if size == 1:
-    #        return
-    #
-    #    with self.test_session(config=self.config) as session:
-    #        tensor = tf.ones([17] * 3, dtype=tf.float32)
-    #        with self.assertRaises(tf.errors.FailedPreconditionError):
-    #            session.run(hvd.broadcast(tensor, rank))
-    #
-    #def test_horovod_broadcast_grad(self):
-    #    """Test the correctness of the broadcast gradient."""
-    #    hvd.init()
-    #    rank = hvd.rank()
-    #    size = hvd.size()
-    #
-    #    # This test does not apply if there is only one worker.
-    #    if size == 1:
-    #        return
-    #
-    #    with self.test_session(config=self.config) as session:
-    #        # As of TensorFlow v1.9, gradients are not supported on
-    #        # integer tensors
-    #        dtypes = [tf.float32, tf.float64]
-    #        dims = [1, 2, 3]
-    #        root_ranks = list(range(size))
-    #        for dtype, dim, root_rank in itertools.product(
-    #                dtypes, dims, root_ranks):
-    #            tensor = tf.ones([5] * dim) * rank
-    #            if dtype == tf.bool:
-    #                tensor = tensor % 2
-    #            tensor = tf.cast(tensor, dtype=dtype)
-    #            broadcasted_tensor = hvd.broadcast(tensor, root_rank)
-    #
-    #            grad_ys = tf.ones([5] * dim)
-    #            grad = tf.gradients(broadcasted_tensor, tensor, grad_ys)[0]
-    #            grad_out = session.run(grad)
-    #
-    #            c = size if rank == root_rank else 0
-    #            expected = np.ones([5] * dim) * c
-    #            err = np.linalg.norm(expected - grad_out)
-    #            self.assertLess(err, 0.00000001,
-    #                            "gradient %s differs from expected %s, "
-    #                            "error: %s" % (grad_out, expected, str(err)))
-    #
-    #def test_compression_fp16(self):
-    #    valid_dtypes = [tf.float16, tf.float32, tf.float64]
-    #    invalid_dtypes = [tf.uint8, tf.int8, tf.uint16, tf.int16,
-    #                      tf.int32, tf.int64, tf.bool]
-    #
-    #    tensor_size = [17] * 3
-    #    compression = hvd.Compression.fp16
-    #
-    #    with self.test_session(config=self.config) as session:
-    #        for dtype in valid_dtypes:
-    #            tensor = tf.ones(tensor_size, dtype=dtype)
-    #
-    #            tensor_compressed, ctx = compression.compress(tensor)
-    #            self.assertEqual(tensor_compressed.dtype, tf.float16)
-    #
-    #            tensor_decompressed = compression.decompress(tensor_compressed, ctx)
-    #            self.assertEqual(tensor_decompressed.dtype, dtype)
-    #
-    #            actual = session.run(tensor_decompressed)
-    #            expected = np.ones(tensor_size)
-    #            err = np.linalg.norm(expected - actual)
-    #            self.assertLess(err, 0.00000001)
-    #
-    #        for dtype in invalid_dtypes:
-    #            tensor = tf.ones(tensor_size, dtype=dtype)
-    #
-    #            tensor_compressed, ctx = compression.compress(tensor)
-    #            self.assertEqual(tensor_compressed.dtype, dtype)
-    #
-    #            tensor_decompressed = compression.decompress(tensor_compressed, ctx)
-    #            self.assertEqual(tensor_decompressed.dtype, dtype)
-    #
-    #            actual = session.run(tensor_decompressed)
-    #            expected = np.ones(tensor_size)
-    #            err = np.linalg.norm(expected - actual)
-    #            self.assertLess(err, 0.00000001)
+
+    def test_compression_fp16(self):
+        valid_dtypes = [tf.float16, tf.float32, tf.float64]
+        invalid_dtypes = [tf.uint8, tf.int8, tf.uint16, tf.int16,
+                          tf.int32, tf.int64, tf.bool]
+
+        tensor_size = [17] * 3
+        compression = hvd.Compression.fp16
+
+        def graph_and_eager(session=None):
+            for dtype in valid_dtypes:
+                tensor = tf.ones(tensor_size, dtype=dtype)
+
+                tensor_compressed, ctx = compression.compress(tensor)
+                self.assertEqual(tensor_compressed.dtype, tf.float16)
+
+                tensor_decompressed = compression.decompress(tensor_compressed, ctx)
+                self.assertEqual(tensor_decompressed.dtype, dtype)
+
+                if session:
+                    actual = session.run(tensor_decompressed)
+                else:
+                    actual = tensor_decompressed
+                expected = np.ones(tensor_size)
+                err = np.linalg.norm(expected - actual)
+                self.assertLess(err, 0.00000001)
+
+            for dtype in invalid_dtypes:
+                if not session and dtype is tf.bool:
+                    return
+                tensor = tf.ones(tensor_size, dtype=dtype)
+
+                tensor_compressed, ctx = compression.compress(tensor)
+                self.assertEqual(tensor_compressed.dtype, dtype)
+
+                tensor_decompressed = compression.decompress(tensor_compressed, ctx)
+                self.assertEqual(tensor_decompressed.dtype, dtype)
+
+                if session:
+                    actual = session.run(tensor_decompressed)
+                else:
+                    actual = tensor_decompressed
+                expected = np.ones(tensor_size)
+                err = np.linalg.norm(expected - actual)
+                self.assertLess(err, 0.00000001)
+
+        with self.eager_mode:
+            graph_and_eager()
+        with self.test_session(config=self.config) as session:
+            graph_and_eager(session)
 
 
 if __name__ == '__main__':
