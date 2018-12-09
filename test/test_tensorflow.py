@@ -60,13 +60,13 @@ class MPITests(tf.test.TestCase):
         size = hvd.size()
         assert true_size == size
 
-    #@test_util.run_in_graph_and_eager_modes
     def test_horovod_allreduce_cpu(self):
         """Test on CPU that the allreduce correctly sums 1D, 2D, 3D tensors."""
         hvd.init()
         size = hvd.size()
         dtypes = [tf.int32, tf.int64, tf.float16, tf.float32, tf.float64]
         dims = [1, 2, 3]
+
         def graph_and_eager(dtype, dim):
             with tf.device("/cpu:0"):
                 tf.set_random_seed(1234)
@@ -108,6 +108,7 @@ class MPITests(tf.test.TestCase):
         with Tensor Fusion."""
         hvd.init()
         size = hvd.size()
+
         def graph_and_eager():
             dtypes = [tf.int32, tf.int64, tf.float16, tf.float32, tf.float64]
             dims = [1, 2, 3]
@@ -189,8 +190,9 @@ class MPITests(tf.test.TestCase):
             for dtype, dim in itertools.product(dtypes, dims):
                 diff, threshold = graph_and_eager(dtype, dim)
                 with self.subTest(msg='eager mode'):
-                    self.assertTrue(diff <= threshold,
-                                    "hvd.allreduce on GPU produces incorrect results")
+                    self.assertTrue(
+                        diff <= threshold,
+                        "hvd.allreduce on GPU produces incorrect results")
 
         with self.test_session(config=self.config) as session:
             dtypes = [tf.int32, tf.int64, tf.float16, tf.float32, tf.float64]
@@ -199,8 +201,9 @@ class MPITests(tf.test.TestCase):
                 max_difference, threshold = graph_and_eager(dtype, dim)
                 diff = session.run(max_difference)
                 with self.subTest(msg='graph mode'):
-                    self.assertTrue(diff <= threshold,
-                                    "hvd.allreduce on GPU produces incorrect results")
+                    self.assertTrue(
+                        diff <= threshold,
+                        "hvd.allreduce on GPU produces incorrect results")
 
     def test_horovod_allreduce_gpu_fused(self):
         """Test that the allreduce works on GPUs with Tensor Fusion.
@@ -296,19 +299,23 @@ class MPITests(tf.test.TestCase):
         dtypes = [tf.int32, tf.int64, tf.float16, tf.float32, tf.float64]
         dims = [1, 2, 3]
         with self.eager_mode:
-            for iter, (dtype, dim) in enumerate(itertools.product(dtypes, dims), start=1):
+            for iter, (dtype, dim) in enumerate(
+                    itertools.product(dtypes, dims), start=1):
                 diff, threshold = graph_and_eager(iter, dtype, dim)
                 with self.subTest(msg='eager mode'):
-                    self.assertTrue(diff <= threshold,
-                                    "hvd.allreduce on GPU produces incorrect results")
+                    self.assertTrue(
+                        diff <= threshold,
+                        "hvd.allreduce on GPU produces incorrect results")
 
         with self.test_session(config=self.config) as session:
-            for iter, (dtype, dim) in enumerate(itertools.product(dtypes, dims), start=1):
+            for iter, (dtype, dim) in enumerate(
+                    itertools.product(dtypes, dims), start=1):
                 max_difference, threshold = graph_and_eager(iter, dtype, dim)
                 diff = session.run(max_difference)
                 with self.subTest(msg='graph mode'):
-                    self.assertTrue(diff <= threshold,
-                                    "hvd.allreduce on GPU produces incorrect results")
+                    self.assertTrue(
+                        diff <= threshold,
+                        "hvd.allreduce on GPU produces incorrect results")
 
     def test_horovod_allreduce_error(self):
         """Test that the allreduce raises an error if different ranks try to
@@ -450,20 +457,22 @@ class MPITests(tf.test.TestCase):
 
         with self.eager_mode:
             for dtype, dim in itertools.product(dtypes, dims):
-                err, grad_out, expected = graph_and_eager(dtype, dim, mode=context.EAGER_MODE)
+                err, grad_out, expected = graph_and_eager(
+                    dtype, dim, mode=context.EAGER_MODE)
                 with self.subTest(msg='graph mode'):
-                    self.assertLess(err, 0.00000001,
-                                    "gradient %s differs from expected %s, "
-                                    "error: %s" % (grad_out, expected, str(err)))
-
+                    self.assertLess(
+                        err, 0.00000001, "gradient %s differs from expected %s, "
+                        "error: %s" %
+                        (grad_out, expected, str(err)))
 
         with self.test_session(config=self.config) as session:
             for dtype, dim in itertools.product(dtypes, dims):
                 err, grad_out, expected = graph_and_eager(dtype, dim)
                 with self.subTest(msg='graph mode'):
-                    self.assertLess(err, 0.00000001,
-                                    "gradient %s differs from expected %s, "
-                                    "error: %s" % (grad_out, expected, str(err)))
+                    self.assertLess(
+                        err, 0.00000001, "gradient %s differs from expected %s, "
+                        "error: %s" %
+                        (grad_out, expected, str(err)))
 
     def test_horovod_allgather(self):
         """Test that the allgather correctly gathers 1D, 2D, 3D tensors."""
@@ -505,13 +514,22 @@ class MPITests(tf.test.TestCase):
                     with self.subTest(msg='eager mode'):
                         self.assertTrue(
                             tf.reduce_all(
-                                tf.equal(tf.cast(rank_tensor, tf.int32), value)),
+                                tf.equal(
+                                    tf.cast(
+                                        rank_tensor,
+                                        tf.int32),
+                                    value)),
                             "hvd.allgather produces incorrect gathered tensor")
                 else:
                     with self.subTest(msg='graph mode'):
                         self.assertTrue(
-                            session.run(tf.reduce_all(
-                                tf.equal(tf.cast(rank_tensor, tf.int32), value))),
+                            session.run(
+                                tf.reduce_all(
+                                    tf.equal(
+                                        tf.cast(
+                                            rank_tensor,
+                                            tf.int32),
+                                        value))),
                             "hvd.allgather produces incorrect gathered tensor")
 
         with self.eager_mode:
@@ -520,7 +538,6 @@ class MPITests(tf.test.TestCase):
         with self.test_session(config=self.config) as session:
             for dtype, dim in itertools.product(dtypes, dims):
                 graph_and_eager(dtype, dim)
-
 
     def test_horovod_allgather_variable_size(self):
         """Test that the allgather correctly gathers 1D, 2D, 3D tensors,
@@ -572,13 +589,22 @@ class MPITests(tf.test.TestCase):
                     with self.subTest(msg='eager mode'):
                         self.assertTrue(
                             tf.reduce_all(
-                                tf.equal(tf.cast(rank_tensor, tf.int32), value)),
+                                tf.equal(
+                                    tf.cast(
+                                        rank_tensor,
+                                        tf.int32),
+                                    value)),
                             "hvd.allgather produces incorrect gathered tensor")
                 else:
                     with self.subTest(msg='graph mode'):
                         self.assertTrue(
-                            session.run(tf.reduce_all(
-                                tf.equal(tf.cast(rank_tensor, tf.int32), value))),
+                            session.run(
+                                tf.reduce_all(
+                                    tf.equal(
+                                        tf.cast(
+                                            rank_tensor,
+                                            tf.int32),
+                                        value))),
                             "hvd.allgather produces incorrect gathered tensor")
 
         with self.eager_mode:
@@ -657,7 +683,8 @@ class MPITests(tf.test.TestCase):
             tensor_sizes = tensor_sizes[:size]
             if mode == context.EAGER_MODE:
                 with tf.GradientTape() as tape:
-                    tensor = tf.Variable(tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank)
+                    tensor = tf.Variable(
+                        tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank)
                     if dtype == tf.bool:
                         tensor = tensor % 2
                     tensor = tf.cast(tensor, dtype=dtype)
@@ -669,7 +696,8 @@ class MPITests(tf.test.TestCase):
                     grad_ys = tf.concat(grad_list, axis=0)
                 grad_out = tape.gradient(gathered, tensor, grad_ys)
             else:
-                tensor = tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank
+                tensor = tf.ones([tensor_sizes[rank]] +
+                                 [17] * (dim - 1)) * rank
                 if dtype == tf.bool:
                     tensor = tensor % 2
                 tensor = tf.cast(tensor, dtype=dtype)
@@ -690,7 +718,8 @@ class MPITests(tf.test.TestCase):
 
         with self.eager_mode:
             for dtype, dim in itertools.product(dtypes, dims):
-                err, grad_out, expected = graph_and_eager(dtype, dim, mode=context.EAGER_MODE)
+                err, grad_out, expected = graph_and_eager(
+                    dtype, dim, mode=context.EAGER_MODE)
                 with self.subTest(msg='eager mode'):
                     self.assertLess(err, 0.00000001,
                                     "gradient %s differs from expected %s, "
@@ -734,21 +763,38 @@ class MPITests(tf.test.TestCase):
         root_ranks = list(range(size))
 
         with self.eager_mode:
-            for dtype, dim, root_rank in itertools.product(dtypes, dims, root_ranks):
-                root_tensor, broadcasted_tensor = graph_and_eager(dtype, dim, root_rank)
+            for dtype, dim, root_rank in itertools.product(
+                    dtypes, dims, root_ranks):
+                root_tensor, broadcasted_tensor = graph_and_eager(
+                    dtype, dim, root_rank)
                 with self.subTest(msg='eager mode'):
                     self.assertTrue(
-                        tf.reduce_all(tf.equal(
-                            tf.cast(root_tensor, tf.int32), tf.cast(broadcasted_tensor, tf.int32))),
+                        tf.reduce_all(
+                            tf.equal(
+                                tf.cast(
+                                    root_tensor,
+                                    tf.int32),
+                                tf.cast(
+                                    broadcasted_tensor,
+                                    tf.int32))),
                         "hvd.broadcast produces incorrect broadcasted tensor")
 
         with self.test_session(config=self.config) as session:
-            for dtype, dim, root_rank in itertools.product(dtypes, dims, root_ranks):
-                root_tensor, broadcasted_tensor = graph_and_eager(dtype, dim, root_rank)
+            for dtype, dim, root_rank in itertools.product(
+                    dtypes, dims, root_ranks):
+                root_tensor, broadcasted_tensor = graph_and_eager(
+                    dtype, dim, root_rank)
                 with self.subTest(msg='graph mode'):
                     self.assertTrue(
-                        session.run(tf.reduce_all(tf.equal(
-                            tf.cast(root_tensor, tf.int32), tf.cast(broadcasted_tensor, tf.int32)))),
+                        session.run(
+                            tf.reduce_all(
+                                tf.equal(
+                                    tf.cast(
+                                        root_tensor,
+                                        tf.int32),
+                                    tf.cast(
+                                        broadcasted_tensor,
+                                        tf.int32)))),
                         "hvd.broadcast produces incorrect broadcasted tensor")
 
     def test_horovod_broadcast_error(self):
@@ -868,7 +914,8 @@ class MPITests(tf.test.TestCase):
         with self.eager_mode:
             for dtype, dim, root_rank in itertools.product(
                     dtypes, dims, root_ranks):
-                err, grad_out, expected = graph_and_eager(dtype, dim, root_rank)
+                err, grad_out, expected = graph_and_eager(
+                    dtype, dim, root_rank)
                 self.assertLess(err, 0.00000001,
                                 "gradient %s differs from expected %s, "
                                 "error: %s" % (grad_out, expected, str(err)))
@@ -876,11 +923,11 @@ class MPITests(tf.test.TestCase):
         with self.test_session(config=self.config) as session:
             for dtype, dim, root_rank in itertools.product(
                     dtypes, dims, root_ranks):
-                err, grad_out, expected = graph_and_eager(dtype, dim, root_rank, session)
+                err, grad_out, expected = graph_and_eager(
+                    dtype, dim, root_rank, session)
                 self.assertLess(err, 0.00000001,
                                 "gradient %s differs from expected %s, "
                                 "error: %s" % (grad_out, expected, str(err)))
-
 
     def test_compression_fp16(self):
         valid_dtypes = [tf.float16, tf.float32, tf.float64]
@@ -897,7 +944,8 @@ class MPITests(tf.test.TestCase):
                 tensor_compressed, ctx = compression.compress(tensor)
                 self.assertEqual(tensor_compressed.dtype, tf.float16)
 
-                tensor_decompressed = compression.decompress(tensor_compressed, ctx)
+                tensor_decompressed = compression.decompress(
+                    tensor_compressed, ctx)
                 self.assertEqual(tensor_decompressed.dtype, dtype)
 
                 if session:
@@ -916,7 +964,8 @@ class MPITests(tf.test.TestCase):
                 tensor_compressed, ctx = compression.compress(tensor)
                 self.assertEqual(tensor_compressed.dtype, dtype)
 
-                tensor_decompressed = compression.decompress(tensor_compressed, ctx)
+                tensor_decompressed = compression.decompress(
+                    tensor_compressed, ctx)
                 self.assertEqual(tensor_decompressed.dtype, dtype)
 
                 if session:
