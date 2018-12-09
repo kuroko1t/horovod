@@ -487,8 +487,6 @@ class MPITests(tf.test.TestCase):
                 gathered_tensor = gathered
             else:
                 gathered_tensor = session.run(gathered)
-            #if gathered_tensor.shape == None:
-            #    print(gathered_tensor)
             self.assertEqual(list(gathered_tensor.shape),
                              [17 * size] + [17] * (dim - 1))
 
@@ -643,71 +641,70 @@ class MPITests(tf.test.TestCase):
                 with self.assertRaises(tf.errors.FailedPreconditionError):
                     session.run(hvd.allgather(tensor))
 
-    #def test_horovod_allgather_grad(self):
-    #    """Test the correctness of the allgather gradient."""
-    #    hvd.init()
-    #    rank = hvd.rank()
-    #    size = hvd.size()
-    #
-    #    # As of TensorFlow v1.9, gradients are not supported on
-    #    # integer tensors
-    #    dtypes = [tf.float32, tf.float64]
-    #    dims = [1, 2, 3]
-    #
-    #    def graph_and_eager(dtype, dim, mode=context.GRAPH_MODE):
-    #        tensor_sizes = [3, 2, 7, 4, 6, 8, 10] * 5
-    #        tensor_sizes = tensor_sizes[:size]
-    #        if mode == context.EAGER_MODE:
-    #            with tf.GradientTape() as tape:
-    #                tensor = tf.Variable(tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank)
-    #                if dtype == tf.bool:
-    #                    tensor = tensor % 2
-    #                tensor = tf.cast(tensor, dtype=dtype)
-    #                gathered = hvd.allgather(tensor)
-    #                grad_list = []
-    #                for r, tensor_size in enumerate(tensor_sizes):
-    #                    g = tf.ones([tensor_size] + [17] * (dim - 1)) * r
-    #                    grad_list.append(g)
-    #                grad_ys = tf.concat(grad_list, axis=0)
-    #            grad_out = tape.gradient(gathered, tensor)
-    #        else:
-    #            tensor = tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank
-    #            if dtype == tf.bool:
-    #                tensor = tensor % 2
-    #            tensor = tf.cast(tensor, dtype=dtype)
-    #            gathered = hvd.allgather(tensor)
-    #            grad_list = []
-    #            for r, tensor_size in enumerate(tensor_sizes):
-    #                g = tf.ones([tensor_size] + [17] * (dim - 1)) * r
-    #                grad_list.append(g)
-    #            grad_ys = tf.concat(grad_list, axis=0)
-    #            grad = tf.gradients(gathered, tensor, grad_ys)[0]
-    #            grad_out = session.run(grad)
-    #
-    #        expected = np.ones(
-    #            [tensor_sizes[rank]] + [17] * (dim - 1)
-    #        ) * rank * size
-    #        err = np.linalg.norm(expected - grad_out)
-    #        return err, grad_out, expected
-    #
-    #    with self.eager_mode:
-    #        for dtype, dim in itertools.product(dtypes, dims):
-    #            err, grad_out, expected = graph_and_eager(dtype, dim, mode=context.EAGER_MODE)
-    #            with self.subTest(msg='eager mode'):
-    #                print('koko')
-    #                self.assertLess(err, 0.00000001,
-    #                                "gradient %s differs from expected %s, "
-    #                                "error: %s" %
-    #                                (grad_out, expected, str(err)))
-    #
-    #    with self.test_session(config=self.config) as session:
-    #        for dtype, dim in itertools.product(dtypes, dims):
-    #            err, grad_out, expected = graph_and_eager(dtype, dim)
-    #            with self.subTest(msg='graph mode'):
-    #                self.assertLess(err, 0.00000001,
-    #                                "gradient %s differs from expected %s, "
-    #                                "error: %s" %
-    #                                (grad_out, expected, str(err)))
+    def test_horovod_allgather_grad(self):
+        """Test the correctness of the allgather gradient."""
+        hvd.init()
+        rank = hvd.rank()
+        size = hvd.size()
+
+        # As of TensorFlow v1.9, gradients are not supported on
+        # integer tensors
+        dtypes = [tf.float32, tf.float64]
+        dims = [1, 2, 3]
+
+        def graph_and_eager(dtype, dim, mode=context.GRAPH_MODE):
+            tensor_sizes = [3, 2, 7, 4, 6, 8, 10] * 5
+            tensor_sizes = tensor_sizes[:size]
+            if mode == context.EAGER_MODE:
+                with tf.GradientTape() as tape:
+                    tensor = tf.Variable(tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank)
+                    if dtype == tf.bool:
+                        tensor = tensor % 2
+                    tensor = tf.cast(tensor, dtype=dtype)
+                    gathered = hvd.allgather(tensor)
+                    grad_list = []
+                    for r, tensor_size in enumerate(tensor_sizes):
+                        g = tf.ones([tensor_size] + [17] * (dim - 1)) * r
+                        grad_list.append(g)
+                    grad_ys = tf.concat(grad_list, axis=0)
+                grad_out = tape.gradient(gathered, tensor, grad_ys)
+            else:
+                tensor = tf.ones([tensor_sizes[rank]] + [17] * (dim - 1)) * rank
+                if dtype == tf.bool:
+                    tensor = tensor % 2
+                tensor = tf.cast(tensor, dtype=dtype)
+                gathered = hvd.allgather(tensor)
+                grad_list = []
+                for r, tensor_size in enumerate(tensor_sizes):
+                    g = tf.ones([tensor_size] + [17] * (dim - 1)) * r
+                    grad_list.append(g)
+                grad_ys = tf.concat(grad_list, axis=0)
+                grad = tf.gradients(gathered, tensor, grad_ys)[0]
+                grad_out = session.run(grad)
+
+            expected = np.ones(
+                [tensor_sizes[rank]] + [17] * (dim - 1)
+            ) * rank * size
+            err = np.linalg.norm(expected - grad_out)
+            return err, grad_out, expected
+
+        with self.eager_mode:
+            for dtype, dim in itertools.product(dtypes, dims):
+                err, grad_out, expected = graph_and_eager(dtype, dim, mode=context.EAGER_MODE)
+                with self.subTest(msg='eager mode'):
+                    self.assertLess(err, 0.00000001,
+                                    "gradient %s differs from expected %s, "
+                                    "error: %s" %
+                                    (grad_out, expected, str(err)))
+
+        with self.test_session(config=self.config) as session:
+            for dtype, dim in itertools.product(dtypes, dims):
+                err, grad_out, expected = graph_and_eager(dtype, dim)
+                with self.subTest(msg='graph mode'):
+                    self.assertLess(err, 0.00000001,
+                                    "gradient %s differs from expected %s, "
+                                    "error: %s" %
+                                    (grad_out, expected, str(err)))
 
     def test_horovod_broadcast(self):
         """Test that the broadcast correctly broadcasts 1D, 2D, 3D tensors."""
