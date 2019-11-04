@@ -22,6 +22,17 @@
 #define OMPI_SKIP_MPICXX
 #include "mpi.h"
 
+typedef unsigned int cl_int;
+struct _cl_command_queue {
+};
+
+typedef _cl_command_queue* cl_command_queue;
+
+struct cl_mem {
+};
+
+cl_int clFinish(cl_command_queue queue);
+
 namespace horovod {
 namespace common {
 
@@ -101,20 +112,20 @@ Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,
                               std::shared_ptr<Tensor> tensor,
                               std::shared_ptr<Tensor> output,
                               std::shared_ptr<ReadyEvent> ready_event,
-                              const std::string name, const int device,
+                              const std::string name, const int device, const cl_command_queue queue,
                               StatusCallback callback);
 
 Status EnqueueTensorAllgather(std::shared_ptr<OpContext> context,
                               std::shared_ptr<Tensor> tensor,
                               std::shared_ptr<ReadyEvent> ready_event,
-                              const std::string name, const int device,
+                              const std::string name, const int device, const cl_command_queue queue,
                               StatusCallback callback);
 
 Status EnqueueTensorBroadcast(std::shared_ptr<OpContext> context,
                               std::shared_ptr<Tensor> tensor,
                               std::shared_ptr<Tensor> output, int root_rank,
                               std::shared_ptr<ReadyEvent> ready_event,
-                              const std::string name, const int device,
+                              const std::string name, const int device, const cl_command_queue queue,
                               StatusCallback callback);
 
 } // namespace common

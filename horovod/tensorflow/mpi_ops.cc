@@ -253,6 +253,12 @@ int GetDeviceID(OpKernelContext* context) {
   return device;
 }
 
+cl_command_queue GetDeviceQueue(OpKernelContext* context) {
+  cl_command_queue queue;
+  return queue;
+}
+
+
 // On GPU this event will signal that data is ready, and tensors are
 // allocated.
 common::ReadyEvent* RecordReadyEvent(OpKernelContext* context) {
@@ -278,6 +284,7 @@ public:
 
     auto node_name = name();
     auto device = GetDeviceID(context);
+    auto queue = GetDeviceQueue(context);
     auto tensor = context->input(0);
     Tensor* output;
     OP_REQUIRES_OK_ASYNC(
@@ -287,8 +294,9 @@ public:
     auto hvd_context = std::make_shared<TFOpContext>(context);
     auto hvd_tensor = std::make_shared<TFTensor>(tensor);
     auto hvd_output = std::make_shared<TFTensor>(*output);
+
     auto enqueue_result = EnqueueTensorAllreduce(
-        hvd_context, hvd_tensor, hvd_output, ready_event, node_name, device,
+        hvd_context, hvd_tensor, hvd_output, ready_event, node_name, device, queue,
         [context, done](const common::Status& status) {
           context->SetStatus(ConvertStatus(status));
           done();
@@ -336,6 +344,7 @@ public:
 
     auto node_name = name();
     auto device = GetDeviceID(context);
+    auto queue = GetDeviceQueue(context);
     auto tensor = context->input(0);
     // ReadyEvent makes sure input tensor is ready.  We cannot pre-allocate
     // output for allgather, since shape of result is only known after all
@@ -344,7 +353,7 @@ public:
     auto hvd_context = std::make_shared<TFOpContext>(context);
     auto hvd_tensor = std::make_shared<TFTensor>(tensor);
     auto enqueue_result = EnqueueTensorAllgather(
-        hvd_context, hvd_tensor, ready_event, node_name, device,
+        hvd_context, hvd_tensor, ready_event, node_name, device, queue,
         [context, done](const common::Status& status) {
           context->SetStatus(ConvertStatus(status));
           done();
@@ -397,6 +406,7 @@ public:
 
     auto node_name = name();
     auto device = GetDeviceID(context);
+    auto queue = GetDeviceQueue(context);
     auto tensor = context->input(0);
     Tensor* output = nullptr;
     if (common::horovod_rank() == root_rank_) {
@@ -415,7 +425,7 @@ public:
     }
     auto enqueue_result = EnqueueTensorBroadcast(
         hvd_context, hvd_tensor, hvd_output, root_rank_, ready_event, node_name,
-        device, [context, done](const common::Status& status) {
+        device, queue, [context, done](const common::Status& status) {
           context->SetStatus(ConvertStatus(status));
           done();
         });

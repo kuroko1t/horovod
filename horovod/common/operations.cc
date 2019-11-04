@@ -42,6 +42,11 @@
 #include "operations.h"
 #include "timeline.h"
 
+cl_int clFinish(cl_command_queue queue) {
+  cl_int i = 1;
+  return i;
+}
+
 /*
  * Allreduce, Allgather and Broadcast Ops.
  *
@@ -90,6 +95,7 @@ struct TensorTableEntry {
   std::shared_ptr<ReadyEvent> ready_event;
   // GPU to do reduction on, or CPU_DEVICE_ID in case of CPU.
   int device = CPU_DEVICE_ID;
+  cl_command_queue fw_queue;
   // A callback to call with the status.
   StatusCallback callback;
 };
@@ -130,6 +136,8 @@ struct HorovodGlobalState {
 
   // Whether Horovod should finalize MPI (only if it has initialized it).
   bool should_finalize = false;
+
+  cl_command_queue fw_clqueue = nullptr;
 
   // Only exists on the coordinator node (rank zero). Maintains a count of
   // how many nodes are ready to allreduce every tensor (keyed by tensor
@@ -721,6 +729,9 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
     }
   }
 
+  horovod_global.fw_clqueue = entries[0].fw_queue;
+  clFinish(horovod_global.fw_clqueue);
+
   auto& timeline = horovod_global.timeline;
   for (auto& e : entries) {
     timeline.Start(e.tensor_name, response.response_type());
@@ -1109,7 +1120,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
           WAIT_FOR_EVENTS(entries, timeline, event_queue)
 
           // According to https://docs.nvidia.com/cuda/cuda-runtime-api/
-          // api-sync-behavior.html#api-sync-behavior__memcpy-async, 
+          // api-sync-behavior.html#api-sync-behavior__memcpy-async,
           // cudaMemcpyAsync is synchronous with respect to the host, so we
           // memcpy (effectively) synchronously to generate an accurate timeline
           ACTIVITY_START_ALL(entries, timeline, MEMCPY_IN_HOST_BUFFER)
@@ -1557,8 +1568,8 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   }
 
   // Override Tensor Fusion threshold, if it's set.
-  auto horovod_fusion_threshold = std::getenv("HOROVOD_FUSION_THRESHOLD"); 
-  int64_t proposed_fusion_threshold = (horovod_fusion_threshold != nullptr) ?  
+  auto horovod_fusion_threshold = std::getenv("HOROVOD_FUSION_THRESHOLD");
+  int64_t proposed_fusion_threshold = (horovod_fusion_threshold != nullptr) ?
         std::strtol(horovod_fusion_threshold, nullptr, 10) :
         state.tensor_fusion_threshold;
 
@@ -1977,7 +1988,7 @@ Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,
                               std::shared_ptr<Tensor> tensor,
                               std::shared_ptr<Tensor> output,
                               std::shared_ptr<ReadyEvent> ready_event,
-                              const std::string name, const int device,
+                              const std::string name, const int device, const cl_command_queue queue,
                               StatusCallback callback) {
   MPIRequest message;
   message.set_request_rank(horovod_global.rank);
@@ -1996,6 +2007,7 @@ Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,
   e.output = output;
   e.ready_event = ready_event;
   e.device = device;
+  e.fw_queue = queue;
   e.callback = callback;
 
   std::lock_guard<std::mutex> guard(horovod_global.mutex);
@@ -2013,7 +2025,7 @@ Status EnqueueTensorAllreduce(std::shared_ptr<OpContext> context,
 Status EnqueueTensorAllgather(std::shared_ptr<OpContext> context,
                               std::shared_ptr<Tensor> tensor,
                               std::shared_ptr<ReadyEvent> ready_event,
-                              const std::string name, const int device,
+                              const std::string name, const int device, const cl_command_queue queue,
                               StatusCallback callback) {
   MPIRequest message;
   message.set_request_rank(horovod_global.rank);
@@ -2031,6 +2043,7 @@ Status EnqueueTensorAllgather(std::shared_ptr<OpContext> context,
   e.tensor = tensor;
   e.ready_event = ready_event;
   e.device = device;
+  e.fw_queue = queue;
   e.callback = callback;
 
   std::lock_guard<std::mutex> guard(horovod_global.mutex);
@@ -2049,7 +2062,7 @@ Status EnqueueTensorBroadcast(std::shared_ptr<OpContext> context,
                               std::shared_ptr<Tensor> tensor,
                               std::shared_ptr<Tensor> output, int root_rank,
                               std::shared_ptr<ReadyEvent> ready_event,
-                              const std::string name, const int device,
+                              const std::string name, const int device, const cl_command_queue queue,
                               StatusCallback callback) {
   MPIRequest message;
   message.set_request_rank(horovod_global.rank);
@@ -2070,6 +2083,7 @@ Status EnqueueTensorBroadcast(std::shared_ptr<OpContext> context,
   e.root_rank = root_rank;
   e.ready_event = ready_event;
   e.device = device;
+  e.fw_queue = queue;
   e.callback = callback;
 
   std::lock_guard<std::mutex> guard(horovod_global.mutex);

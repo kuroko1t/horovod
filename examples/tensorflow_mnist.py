@@ -21,7 +21,6 @@ learn = tf.contrib.learn
 
 tf.logging.set_verbosity(tf.logging.INFO)
 
-
 def conv_model(feature, target, mode):
     """2-layer convolution model."""
     # Convert the target to a one-hot tensor of shape (batch_size, 10) and
@@ -92,7 +91,7 @@ def main(_):
         hvd.BroadcastGlobalVariablesHook(0),
 
         # Horovod: adjust number of steps based on number of GPUs.
-        tf.train.StopAtStepHook(last_step=20000 // hvd.size()),
+        tf.train.StopAtStepHook(last_step=20 // hvd.size()),
 
         tf.train.LoggingTensorHook(tensors={'step': global_step, 'loss': loss},
                                    every_n_iter=10),
