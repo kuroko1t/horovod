@@ -754,18 +754,56 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
 
   // On GPU data readiness is signalled by ready_event.
   std::vector<TensorTableEntry> waiting_tensors;
+  std::unordered_map<TensorTableEntry, int> waiting_tensors_for_fusion;
+  int i = 0;
   for (auto& e : entries) {
     if (e.ready_event != nullptr) {
       timeline.ActivityStart(e.tensor_name, WAIT_FOR_DATA);
       waiting_tensors.push_back(e);
+      waiting_tensors_for_fusion[e] = i;
     }
+    i++;
   }
   while (!waiting_tensors.empty()) {
     for (auto it = waiting_tensors.begin(); it != waiting_tensors.end();) {
       if (it->ready_event->Ready()) {
         timeline.ActivityEnd(it->tensor_name);
         timeline.ActivityStart(it->tensor_name, WAIT_FOR_OTHER_TENSOR_DATA);
+#if HAVE_CUDA
+        if (response.response_type() == MPIResponse::ALLREDUCE) {
+          auto& first_entry = entries[0];
+          bool on_gpu = first_entry.device != CPU_DEVICE_ID;
+          if (on_gpu) {
+            if (entries.size() > 1) {
+              CUDA_CHECK(entries, "cudaSetDevice", cudaSetDevice(first_entry.device))
+                // Ensure stream is in the map before executing reduction.
+                cudaStream_t& stream = horovod_global.streams[first_entry.device];
+              if (stream == nullptr) {
+                int greatest_priority;
+                CUDA_CHECK(entries, "cudaDeviceGetStreamPriorityRange",
+                           cudaDeviceGetStreamPriorityRange(NULL, &greatest_priority))
+                  CUDA_CHECK(entries, "cudaStreamCreateWithPriority",
+                             cudaStreamCreateWithPriority(&stream, cudaStreamNonBlocking,
+                                                          greatest_priority))
+                  }
+              auto& buffer = horovod_global.tensor_fusion_buffers[std::make_tuple(
+                              first_entry.device, first_entry.context->framework())];
+              buffer_data =
+                const_cast<void*>(buffer->AccessData(first_entry.context));
+              int64_t offset = 0;
+              for (int j = 0; j < waiting_tensors_for_fusion[e]; j++) {
+                offset += entries[j]
+              }
+              void* buffer_data_at_offset = (uint8_t*)buffer_data + offset;
+              CUDA_CHECK(entries, "cudaMemcpyAsync",
+                         cudaMemcpyAsync(buffer_data_at_offset, e.tensor->data(),
+                                         (size_t)e.tensor->size(),
+                                         cudaMemcpyDeviceToDevice, stream))
+            }
+          }
+        }
         it = waiting_tensors.erase(it);
+#endif
       } else {
         ++it;
       }
@@ -953,15 +991,15 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
             const_cast<void*>(buffer->AccessData(first_entry.context));
 
         // Copy memory into the fusion buffer.
-        int64_t offset = 0;
-        for (auto& e : entries) {
-          void* buffer_data_at_offset = (uint8_t*)buffer_data + offset;
-          CUDA_CHECK(entries, "cudaMemcpyAsync",
-                     cudaMemcpyAsync(buffer_data_at_offset, e.tensor->data(),
-                                     (size_t)e.tensor->size(),
-                                     cudaMemcpyDeviceToDevice, stream))
-          offset += e.tensor->size();
-        }
+        //int64_t offset = 0;
+        //for (auto& e : entries) {
+        //  void* buffer_data_at_offset = (uint8_t*)buffer_data + offset;
+        //  CUDA_CHECK(entries, "cudaMemcpyAsync",
+        //             cudaMemcpyAsync(buffer_data_at_offset, e.tensor->data(),
+        //                             (size_t)e.tensor->size(),
+        //                             cudaMemcpyDeviceToDevice, stream))
+        //  offset += e.tensor->size();
+        //}
 
         buffer_len = (size_t)offset;
 
@@ -1109,7 +1147,7 @@ void PerformOperation(TensorTable& tensor_table, MPIResponse response) {
           WAIT_FOR_EVENTS(entries, timeline, event_queue)
 
           // According to https://docs.nvidia.com/cuda/cuda-runtime-api/
-          // api-sync-behavior.html#api-sync-behavior__memcpy-async, 
+          // api-sync-behavior.html#api-sync-behavior__memcpy-async,
           // cudaMemcpyAsync is synchronous with respect to the host, so we
           // memcpy (effectively) synchronously to generate an accurate timeline
           ACTIVITY_START_ALL(entries, timeline, MEMCPY_IN_HOST_BUFFER)
@@ -1557,8 +1595,8 @@ void BackgroundThreadLoop(HorovodGlobalState& state) {
   }
 
   // Override Tensor Fusion threshold, if it's set.
-  auto horovod_fusion_threshold = std::getenv("HOROVOD_FUSION_THRESHOLD"); 
-  int64_t proposed_fusion_threshold = (horovod_fusion_threshold != nullptr) ?  
+  auto horovod_fusion_threshold = std::getenv("HOROVOD_FUSION_THRESHOLD");
+  int64_t proposed_fusion_threshold = (horovod_fusion_threshold != nullptr) ?
         std::strtol(horovod_fusion_threshold, nullptr, 10) :
         state.tensor_fusion_threshold;
 
